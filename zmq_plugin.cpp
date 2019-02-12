@@ -136,6 +136,32 @@ namespace zmqplugin {
     bool                       deleted = false;
   };
 
+  struct stake_info {
+    name  account_name;
+    asset cpu_stake_by_self;
+    asset net_stake_by_self;
+  };
+
+  struct refund_info {
+    name           owner;
+    time_point_sec request_time;
+    asset          net_amount;
+    asset          cpu_amount;
+  };
+
+  struct voter_info {
+    name          owner;
+    name          proxy;
+    vector<name>  producers;
+    int64_t       staked;
+    double        last_vote_weight;
+    double        proxied_vote_weight;
+    bool          is_proxy;
+    uint32_t      reserved1;
+    uint32_t      reserved2;
+    eosio::asset  reserved3;
+  };
+
   struct zmq_action_object {
     uint64_t                     global_action_seq;
     block_num_type               block_num;
@@ -143,6 +169,9 @@ namespace zmqplugin {
     fc::variant                  action_trace;
     vector<resource_balance>     resource_balances;
     vector<currency_balance>     currency_balances;
+    vector<stake_info>           stakes;
+    vector<refund_info>          refunds;
+    vector<voter_info>           voters;
     uint32_t                     last_irreversible_block;
   };
 
@@ -221,6 +250,10 @@ namespace eosio {
                         std::set<name>{ N(tweet) } ));
     }
 
+    static void copy_inline_row(const chain::key_value_object& obj, vector<char>& data) {
+      data.resize( obj.value.size() );
+      memcpy( data.data(), obj.value.data(), obj.value.size() );
+    }
 
     void send_msg( const string content, int32_t msgtype, int32_t msgopts)
     {
@@ -333,7 +366,10 @@ namespace eosio {
         if( !whitelist_matched )
           return;
       }
-        
+
+      const auto& db = chain.db();
+      const auto& code_account = db.get<account_object,by_name>( config::system_account_name );
+      const auto& idx = db.get_index<key_value_index, by_scope_primary>(); 
       const auto& rm = chain.get_resource_limits_manager();
 
       // populate resource_balances
@@ -348,11 +384,49 @@ namespace eosio {
           bal.cpu_limit = rm.get_account_cpu_limit_ex( account_name, !grelisted);
           bal.ram_usage = rm.get_account_ram_usage( account_name );
           zao.resource_balances.emplace_back(bal);
+
+          abi_def abi;
+          if( abi_serializer::to_abi(code_account.abi, abi) ) {
+            abi_serializer abis( abi, abi_serializer_max_time );
+
+            const auto &idx = db.get_index<key_value_index, by_scope_primary>();
+            auto t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( config::system_account_name, account_name, N(delband) ));
+            if (t_id != nullptr) {
+              auto it = idx.find(boost::make_tuple( t_id->id, account_name ));
+              if ( it != idx.end() ) {
+                stake_info stk;
+                vector<char> data;
+                copy_inline_row(*it, data);
+                auto self_delegatebw = abis.binary_to_variant( "delegated_bandwidth", data, abi_serializer_max_time, true );
+                stk.account_name = account_name;
+                stk.cpu_stake_by_self = self_delegatebw["cpu_weight"].as<asset>();
+                stk.net_stake_by_self = self_delegatebw["net_weight"].as<asset>();
+                zao.stakes.emplace_back(stk);
+              }
+            }
+
+            t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( config::system_account_name, account_name, N(refunds) ));
+            if (t_id != nullptr) {
+              auto it = idx.find(boost::make_tuple( t_id->id, account_name ));
+              if ( it != idx.end() ) {
+                vector<char> data;
+                copy_inline_row(*it, data);
+                zao.refunds.emplace_back(abis.binary_to_variant( "refund_request", data, abi_serializer_max_time, true ).as<refund_info>()); 
+              }
+            }
+
+            t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( config::system_account_name, config::system_account_name, N(voters) ));
+            if (t_id != nullptr) {
+              auto it = idx.find(boost::make_tuple( t_id->id, account_name ));
+              if ( it != idx.end() ) {
+                vector<char> data;
+                copy_inline_row(*it, data);
+                zao.voters.emplace_back(abis.binary_to_variant( "voter_info", data, abi_serializer_max_time, true ).as<voter_info>());
+              }
+            }
+          }
         }
       }
-
-      const auto& db = chain.db();
-      const auto &idx = db.get_index<key_value_index, by_scope_primary>();
 
       // populate token balances
       for (auto ctrit = asset_moves.begin(); ctrit != asset_moves.end(); ++ctrit) {
@@ -435,6 +509,10 @@ namespace eosio {
 
       if( at.receipt.receiver != at.act.account ) {
         accounts.insert(at.receipt.receiver);
+      }
+
+      for( auto itr = at.act.authorization.begin(); itr != at.act.authorization.end(); itr++ ){
+        accounts.insert(itr->actor);
       }
 
       if( at.act.account == config::system_account_name ) {
@@ -633,6 +711,7 @@ namespace eosio {
 
   void zmq_plugin::plugin_initialize(const variables_map& options)
   {
+    ilog("zmq_plugin init");
     my->socket_bind_str = options.at(SENDER_BIND_OPT).as<string>();
     if (my->socket_bind_str.empty()) {
       wlog("zmq-sender-bind not specified => eosio::zmq_plugin disabled.");
@@ -669,6 +748,7 @@ namespace eosio {
   }
 
   void zmq_plugin::plugin_startup() {
+    ilog("zmq_plugin start");
   }
 
   void zmq_plugin::plugin_shutdown() {
@@ -676,6 +756,7 @@ namespace eosio {
       my->sender_socket.disconnect(my->socket_bind_str);
       my->sender_socket.close();
     }
+    ilog("zmq_plugin shutdown");
   }
 }
 
@@ -724,12 +805,21 @@ FC_REFLECT( zmqplugin::token::open,
 FC_REFLECT( zmqplugin::resource_balance,
             (account_name)(ram_quota)(ram_usage)(net_weight)(cpu_weight)(net_limit)(cpu_limit) )
 
+FC_REFLECT( zmqplugin::stake_info,
+            (account_name)(cpu_stake_by_self)(net_stake_by_self) )
+
+FC_REFLECT( zmqplugin::refund_info,
+            (owner)(request_time)(net_amount)(cpu_amount) )
+
+FC_REFLECT( zmqplugin::voter_info,
+            (owner)(proxy)(producers)(staked)(last_vote_weight)(proxied_vote_weight)(is_proxy)(reserved1)(reserved2)(reserved3) )
+
 FC_REFLECT( zmqplugin::currency_balance,
-            (account_name)(contract)(balance)(deleted))
+            (account_name)(contract)(balance)(deleted) )
 
 FC_REFLECT( zmqplugin::zmq_action_object,
             (global_action_seq)(block_num)(block_time)(action_trace)
-            (resource_balances)(currency_balances)(last_irreversible_block) )
+            (resource_balances)(currency_balances)(stakes)(refunds)(voters)(last_irreversible_block) )
 
 FC_REFLECT( zmqplugin::zmq_irreversible_block_object,
             (irreversible_block_num)(irreversible_block_digest) )
