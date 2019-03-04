@@ -8,10 +8,7 @@
 #include <zmq.hpp>
 #include <fc/io/json.hpp>
 
-#include <eosio/chain/types.hpp>
-#include <eosio/chain/controller.hpp>
 #include <eosio/chain/trace.hpp>
-#include <eosio/chain_plugin/chain_plugin.hpp>
 
 namespace {
   const char* SENDER_BIND_OPT = "zmq-sender-bind";
@@ -23,154 +20,8 @@ namespace {
   const int32_t MSGTYPE_FORK = 2;
   const int32_t MSGTYPE_ACCEPTED_BLOCK = 3;
   const int32_t MSGTYPE_FAILED_TX = 4;
+  const int32_t MSGTYPE_BALANCE_RESOURCE = 5;
 }
-
-namespace zmqplugin {
-  using namespace eosio;
-  using namespace eosio::chain;
-  using account_resource_limit = chain::resource_limits::account_resource_limit;
-
-  // these structures are not defined in contract_types.hpp, so we define them here
-  namespace syscontract {
-
-    struct buyrambytes {
-      account_name payer;
-      account_name receiver;
-      uint32_t bytes;
-    };
-
-    struct buyram {
-      account_name payer;
-      account_name receiver;
-      asset quant;
-    };
-
-    struct sellram {
-      account_name account;
-      uint64_t bytes;
-    };
-
-    struct delegatebw {
-      account_name from;
-      account_name receiver;
-      asset stake_net_quantity;
-      asset stake_cpu_quantity;
-      bool transfer;
-    };
-
-    struct undelegatebw {
-      account_name from;
-      account_name receiver;
-      asset unstake_net_quantity;
-      asset unstake_cpu_quantity;
-    };
-
-    struct refund {
-      account_name owner;
-    };
-
-    struct regproducer {
-      account_name producer;
-      public_key_type producer_key;
-      string url;
-      uint16_t location;
-    };
-
-    struct unregprod {
-      account_name producer;
-    };
-
-    struct regproxy {
-      account_name proxy;
-      bool isproxy;
-    };
-
-    struct voteproducer {
-      account_name voter;
-      account_name proxy;
-      std::vector<account_name> producers;
-    };
-
-    struct claimrewards {
-      account_name owner;
-    };
-  }
-
-  namespace token {
-    struct transfer {
-      account_name from;
-      account_name to;
-      asset quantity;
-      string memo;
-    };
-
-    struct issue {
-      account_name to;
-      asset quantity;
-      string memo;
-    };
-
-    struct open {
-      account_name owner;
-      symbol symbol;
-      account_name ram_payer;
-    };
-  }
-
-  typedef std::map<account_name,std::map<symbol,std::set<account_name>>> assetmoves;
-
-  struct resource_balance {
-    name                       account_name;
-    int64_t                    ram_quota  = 0;
-    int64_t                    ram_usage = 0;
-    int64_t                    net_weight = 0;
-    int64_t                    cpu_weight = 0;
-    account_resource_limit     net_limit;
-    account_resource_limit     cpu_limit;
-  };
-
-  struct currency_balance {
-    name                       account_name;
-    name                       contract;
-    asset                      balance;
-    bool                       deleted = false;
-  };
-
-  struct zmq_action_object {
-    uint64_t                     global_action_seq;
-    block_num_type               block_num;
-    chain::block_timestamp_type  block_time;
-    fc::variant                  action_trace;
-    vector<resource_balance>     resource_balances;
-    vector<currency_balance>     currency_balances;
-    uint32_t                     last_irreversible_block;
-  };
-
-  struct zmq_irreversible_block_object {
-    block_num_type               irreversible_block_num;
-    digest_type                  irreversible_block_digest;
-  };
-
-  struct zmq_fork_block_object {
-    block_num_type                    invalid_block_num;
-  };
-
-  struct zmq_accepted_block_object {
-    block_num_type               accepted_block_num;
-    block_timestamp_type         accepted_block_timestamp;
-    account_name                 accepted_block_producer;
-    digest_type                  accepted_block_digest;
-  };
-
-  // see status definitions in libraries/chain/include/eosio/chain/block.hpp
-  struct zmq_failed_transaction_object {
-    string                                         trx_id;
-    block_num_type                                 block_num;
-    eosio::chain::transaction_receipt::status_enum status_name; // enum
-    uint8_t                                        status_int;  // the same as status, but integer
-  };
-}
-
 
 namespace eosio {
   using namespace chain;
@@ -178,6 +29,20 @@ namespace eosio {
   using boost::signals2::scoped_connection;
 
   static appbase::abstract_plugin& _zmq_plugin = app().register_plugin<zmq_plugin>();
+
+  #define CALL(api_name, api_handle, api_namespace, call_name) \
+  {std::string("/v1/" #api_name "/" #call_name), \
+    [api_handle](string, string body, url_response_callback cb) mutable { \
+            try { \
+              if (body.empty()) body = "{}"; \
+              auto result = api_handle.call_name(fc::json::from_string(body).as<api_namespace::call_name ## _params>()); \
+              cb(200, fc::json::to_string(result)); \
+            } catch (...) { \
+              http_plugin::handle_exception(#api_name, #call_name, body, cb); \
+            } \
+        }}
+
+  #define CHAIN_RO_CALL(call_name) CALL(zmq, ro_api, zmq_apis::read_only, call_name)
 
   class zmq_plugin_impl {
   public:
@@ -632,6 +497,54 @@ namespace eosio {
     }
   };
 
+  namespace zmq_apis{
+  using namespace eosio;
+  using namespace zmqplugin;
+
+  class read_only {
+     const controller& ct;
+     const fc::microseconds abi_serializer_max_time;
+     bool  shorten_abi_errors = true;
+     std::shared_ptr<zmq_plugin_impl> zmq_impl;
+
+  public:
+
+     read_only(const controller& ct, const fc::microseconds& abi_serializer_max_time, std::shared_ptr<zmq_plugin_impl> zmq_impl)
+        : ct(ct), abi_serializer_max_time(abi_serializer_max_time),zmq_impl(zmq_impl) {}
+
+     struct token_params {
+        account_name     contract;
+        symbol_code     symbol;
+     };
+
+     struct get_accounts_balance_params{
+        vector<token_params> tokens;
+     };
+
+     struct get_accounts_balance_result{
+        string result;
+     };
+
+     get_accounts_balance_result get_accounts_balance( const get_accounts_balance_params& p )const;
+
+     struct get_balance_by_account_params{
+        account_name account;
+        vector<token_params> tokens;
+     };
+
+     struct get_balance_by_account_result{
+        string result;
+     };
+
+     get_balance_by_account_result get_balance_by_account( const get_balance_by_account_params& p )const;
+
+     void get_currency_by_account(zmq_accounts_info_object& zai, name account, name contract, symbol_code symcode)const;
+
+     resource_balance get_resource_by_account(name account)const;
+  };
+
+  }
+
 
   zmq_plugin::zmq_plugin():my(new zmq_plugin_impl()){}
   zmq_plugin::~zmq_plugin(){}
@@ -684,6 +597,12 @@ namespace eosio {
   }
 
   void zmq_plugin::plugin_startup() {
+    auto ro_api = zmq_apis::read_only(my->chain_plug->chain(),my->chain_plug->get_abi_serializer_max_time(), my);
+
+    app().get_plugin<http_plugin>().add_api({
+        CHAIN_RO_CALL(get_accounts_balance),
+        CHAIN_RO_CALL(get_balance_by_account)
+    });
   }
 
   void zmq_plugin::plugin_shutdown() {
@@ -691,6 +610,83 @@ namespace eosio {
       my->sender_socket.disconnect(my->socket_bind_str);
       my->sender_socket.close();
     }
+  }
+
+  namespace zmq_apis{
+
+    read_only::get_accounts_balance_result read_only::get_accounts_balance( const read_only::get_accounts_balance_params& p )const{
+      zmq_accounts_info_object zai;
+      uint64_t account_parse_counter = 1;
+      const auto &account_list = ct.db().get_index<account_index,by_id>();
+      for(auto itr = account_list.begin(); itr != account_list.end(); itr++, account_parse_counter++){
+        auto account = itr->name;
+        zai.resource_balances.emplace_back(get_resource_by_account(account));
+        uint64_t counter = 1;
+        for(auto t_itr = p.tokens.begin(); t_itr != p.tokens.end(); t_itr++,counter++){
+          get_currency_by_account(zai, account, t_itr->contract, t_itr->symbol);
+          if( counter%100==0 && (zai.resource_balances.size() !=0 || zai.currency_balances.size() != 0)){
+            zmq_impl->send_msg(fc::json::to_string(zai), MSGTYPE_BALANCE_RESOURCE, 0);
+            zai.resource_balances.clear();
+            zai.currency_balances.clear();
+          }
+        }
+
+        if( zai.resource_balances.size() !=0 || zai.currency_balances.size() != 0){
+          zmq_impl->send_msg(fc::json::to_string(zai), MSGTYPE_BALANCE_RESOURCE, 0);
+          zai.resource_balances.clear();
+          zai.currency_balances.clear();
+        }
+
+        if( account_parse_counter % 10000 == 0 ){
+          ilog(" parse accounts' token process: ${counter}",("counter",account_parse_counter));
+        }
+      }
+      ilog(" parse accounts' token process: ${counter}",("counter",account_parse_counter));
+      return read_only::get_accounts_balance_result{"ok"};
+    }
+
+    read_only::get_balance_by_account_result read_only::get_balance_by_account( const read_only::get_balance_by_account_params& p )const{
+      zmq_accounts_info_object zai;
+      zai.resource_balances.emplace_back(get_resource_by_account(p.account));
+      for(auto itr = p.tokens.begin(); itr != p.tokens.end(); itr++){
+        get_currency_by_account(zai, p.account, itr->contract, itr->symbol);
+      }
+      zmq_impl->send_msg(fc::json::to_string(zai), MSGTYPE_BALANCE_RESOURCE, 0);
+      return read_only::get_balance_by_account_result{"ok"};
+    }
+
+    void read_only::get_currency_by_account(zmq_accounts_info_object& zai, name account, name contract, symbol_code symcode)const{
+      const auto& db = ct.db();
+      const auto &idx = db.get_index<key_value_index, by_scope_primary>();
+
+      const auto* balance_t_id = db.find<chain::table_id_object, chain::by_code_scope_table>
+        (boost::make_tuple( contract, account, N(accounts) ));
+      if( balance_t_id != nullptr ) {
+        auto bal_entry = idx.find(boost::make_tuple( balance_t_id->id, symcode ));
+        if ( bal_entry != idx.end() ) {
+          asset bal;
+          fc::datastream<const char *> ds(bal_entry->value.data(), bal_entry->value.size());
+          fc::raw::unpack(ds, bal);
+          if( bal.get_symbol().valid() ) {
+            zai.currency_balances.emplace_back( currency_balance{account, contract, bal} );
+          }
+        }
+      }
+    }
+
+    resource_balance read_only::get_resource_by_account(name account)const{
+      const auto& rm = ct.get_resource_limits_manager();
+
+      resource_balance bal;
+      bal.account_name = account;
+      rm.get_account_limits( account, bal.ram_quota, bal.net_weight, bal.cpu_weight );
+      bool grelisted = ct.is_resource_greylisted(account);
+      bal.net_limit = rm.get_account_net_limit_ex( account, !grelisted);
+      bal.cpu_limit = rm.get_account_cpu_limit_ex( account, !grelisted);
+      bal.ram_usage = rm.get_account_ram_usage( account );
+      return bal;
+    }
+
   }
 }
 
@@ -757,3 +753,19 @@ FC_REFLECT( zmqplugin::zmq_accepted_block_object,
 
 FC_REFLECT( zmqplugin::zmq_failed_transaction_object,
             (trx_id)(block_num)(status_name)(status_int) )
+
+FC_REFLECT( zmqplugin::zmq_accounts_info_object,
+            (resource_balances)(currency_balances))
+
+
+FC_REFLECT( eosio::zmq_apis::read_only::token_params,
+            (contract)(symbol) )
+FC_REFLECT( eosio::zmq_apis::read_only::get_accounts_balance_params,
+            (tokens) )
+FC_REFLECT( eosio::zmq_apis::read_only::get_accounts_balance_result,
+            (result) )
+
+FC_REFLECT( eosio::zmq_apis::read_only::get_balance_by_account_params,
+            (account)(tokens) )
+FC_REFLECT( eosio::zmq_apis::read_only::get_balance_by_account_result,
+            (result) )
