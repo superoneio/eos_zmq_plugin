@@ -116,7 +116,19 @@ namespace zmqplugin {
     name                       account_name;
     name                       contract;
     asset                      balance;
+    asset                      stake;
+    asset                      refund;
     bool                       deleted = false;
+  };
+
+  struct voter_info {
+    name                      owner;
+    name                      proxy;
+    std::vector<account_name> producers;
+    int64_t                   staked;
+    double                    last_vote_weight;
+    double                    proxied_vote_weight;
+    bool                      is_proxy;
   };
 
   struct zmq_action_object {
@@ -125,6 +137,7 @@ namespace zmqplugin {
     chain::block_timestamp_type  block_time;
     fc::variant                  action_trace;
     vector<resource_balance>     resource_balances;
+    vector<voter_info>           voter_infos;
     vector<currency_balance>     currency_balances;
     uint32_t                     last_irreversible_block;
   };
@@ -155,6 +168,7 @@ namespace zmqplugin {
 
   struct zmq_accounts_info_object {
     vector<resource_balance>     resource_balances;
+    vector<voter_info>           voter_infos;
     vector<currency_balance>     currency_balances;
   };
 }
