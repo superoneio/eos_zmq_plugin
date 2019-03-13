@@ -30,6 +30,8 @@ namespace eosio {
 
   static appbase::abstract_plugin& _zmq_plugin = app().register_plugin<zmq_plugin>();
 
+  static symbol core_symbol = symbol();
+
   #define CALL(api_name, api_handle, api_namespace, call_name) \
   {std::string("/v1/" #api_name "/" #call_name), \
     [api_handle](string, string body, url_response_callback cb) mutable { \
@@ -46,7 +48,7 @@ namespace eosio {
 
   class zmq_plugin_impl {
   public:
-    zmq::context_t context;
+    zmq::context_t  context;
     zmq::socket_t sender_socket;
     string socket_bind_str;
     chain_plugin*          chain_plug = nullptr;
@@ -90,6 +92,83 @@ namespace eosio {
                         std::set<name>{ N(ddos) } ));
     }
 
+    static void copy_inline_row(const chain::key_value_object& obj, vector<char>& data) {
+      data.resize( obj.value.size() );
+      memcpy( data.data(), obj.value.data(), obj.value.size() );
+    }
+
+    static optional<asset> get_balance_by_contract( const chainbase::database& db, name account, name contract, symbol_code symcode ){
+      const auto &idx = db.get_index<key_value_index, by_scope_primary>();
+      optional<asset> opt_bal;
+
+      // get eos balance
+      const auto* balance_t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( contract, account, N(accounts) ));
+      if( balance_t_id != nullptr ) {
+        auto bal_entry = idx.find(boost::make_tuple( balance_t_id->id, symcode ));
+        if ( bal_entry != idx.end() ) {
+          asset bal;
+          fc::datastream<const char *> ds(bal_entry->value.data(), bal_entry->value.size());
+          fc::raw::unpack(ds, bal);
+          if( bal.get_symbol().valid() ) {
+            opt_bal.emplace(bal);
+          }
+        }
+      }
+      return opt_bal;
+    }
+
+    static optional<int64_t> get_stake( const chainbase::database& db, name account, abi_serializer abis, const fc::microseconds abi_serializer_max_time ){
+      const auto &idx = db.get_index<key_value_index, by_scope_primary>();
+      optional<int64_t> opt_stake;
+
+      const auto* balance_t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( N(eosio), N(eosio), N(voters) ));
+      if( balance_t_id != nullptr ) {
+        auto it = idx.find(boost::make_tuple( balance_t_id->id, account ));
+        if ( it != idx.end() ) {
+          vector<char> data;
+          copy_inline_row(*it, data);
+          auto voter_info = abis.binary_to_variant( "voter_info", data, abi_serializer_max_time, true );
+          auto stake = voter_info["staked"].as<int64_t>();
+          opt_stake.emplace(stake);
+        }
+      }
+      return opt_stake;
+    }
+
+    static optional<asset> get_refund( const chainbase::database& db, name account, abi_serializer abis, const fc::microseconds abi_serializer_max_time ){
+      const auto &idx = db.get_index<key_value_index, by_scope_primary>();
+      optional<asset> opt_refund;
+
+      const auto* balance_t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( N(eosio), account, N(refunds) ));
+      if( balance_t_id != nullptr ) {
+        auto it = idx.find(boost::make_tuple( balance_t_id->id, account ));
+        if ( it != idx.end() ) {
+          vector<char> data;
+          copy_inline_row(*it, data);
+          auto refund_info = abis.binary_to_variant( "refund_request", data, abi_serializer_max_time, true );
+          auto refund = refund_info["net_amount"].as<asset>() + refund_info["cpu_amount"].as<asset>();
+          opt_refund.emplace(refund);
+        }
+      }
+      return opt_refund;
+    }
+
+    static optional<voter_info> get_voter_info( const chainbase::database& db, name account, abi_serializer abis, const fc::microseconds abi_serializer_max_time ){
+      const auto &idx = db.get_index<key_value_index, by_scope_primary>();
+      optional<voter_info> opt_voter_info;
+
+      const auto* balance_t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( N(eosio), N(eosio), N(voters) ));
+      if( balance_t_id != nullptr ) {
+        auto it = idx.find(boost::make_tuple( balance_t_id->id, account ));
+        if ( it != idx.end() ) {
+          vector<char> data;
+          copy_inline_row(*it, data);
+          auto voter = (abis.binary_to_variant( "voter_info", data, abi_serializer_max_time, true )).as<voter_info>();
+          opt_voter_info.emplace(voter);
+        }
+      }
+      return opt_voter_info;
+    }
 
     void send_msg( const string content, int32_t msgtype, int32_t msgopts)
     {
@@ -206,22 +285,35 @@ namespace eosio {
       const auto& rm = chain.get_resource_limits_manager();
 
       // populate resource_balances
-      for (auto accit = accounts.begin(); accit != accounts.end(); ++accit) {
-        name account_name = *accit;
-        if( is_account_of_interest(account_name) ) {
-          resource_balance bal;
-          bal.account_name = account_name;
-          rm.get_account_limits( account_name, bal.ram_quota, bal.net_weight, bal.cpu_weight );
-          bool grelisted = chain.is_resource_greylisted(account_name);
-          bal.net_limit = rm.get_account_net_limit_ex( account_name, !grelisted);
-          bal.cpu_limit = rm.get_account_cpu_limit_ex( account_name, !grelisted);
-          bal.ram_usage = rm.get_account_ram_usage( account_name );
-          zao.resource_balances.emplace_back(bal);
-        }
-      }
+      // for (auto accit = accounts.begin(); accit != accounts.end(); ++accit) {
+      //   name account_name = *accit;
+      //   if( is_account_of_interest(account_name) ) {
+      //     resource_balance bal;
+      //     bal.account_name = account_name;
+      //     rm.get_account_limits( account_name, bal.ram_quota, bal.net_weight, bal.cpu_weight );
+      //     bool grelisted = chain.is_resource_greylisted(account_name);
+      //     bal.net_limit = rm.get_account_net_limit_ex( account_name, !grelisted);
+      //     bal.cpu_limit = rm.get_account_cpu_limit_ex( account_name, !grelisted);
+      //     bal.ram_usage = rm.get_account_ram_usage( account_name );
+      //     zao.resource_balances.emplace_back(bal);
+      //   }
+      // }
 
       const auto& db = chain.db();
+      const auto& code_account = db.get<account_object,by_name>( config::system_account_name );
       const auto &idx = db.get_index<key_value_index, by_scope_primary>();
+
+      // populate voter_infos
+      for (auto accit = accounts.begin(); accit != accounts.end(); ++accit) {
+        name account_name = *accit;
+        ilog("hi ${acc}",("acc",account_name));
+        abi_def abi;
+        if( abi_serializer::to_abi(code_account.abi, abi) ) {
+          abi_serializer abis( abi, abi_serializer_max_time );
+          auto opt_voter_info = zmq_plugin_impl::get_voter_info(db, account_name, abis, abi_serializer_max_time);
+          if( opt_voter_info.valid() ) zao.voter_infos.emplace_back(*opt_voter_info);
+        }
+      }
 
       // populate token balances
       for (auto ctrit = asset_moves.begin(); ctrit != asset_moves.end(); ++ctrit) {
@@ -229,38 +321,43 @@ namespace eosio {
         for (auto symit = ctrit->second.begin(); symit != ctrit->second.end(); ++symit) {
           symbol sym = symit->first;
           uint64_t symcode = sym.to_symbol_code().value;
-          // check if this is a valid token contract
-          const auto* stat_t_id = db.find<chain::table_id_object, chain::by_code_scope_table>
-            (boost::make_tuple( token_code, symcode, N(stat) ));
-          if( stat_t_id != nullptr ) {
-            auto statit = idx.find(boost::make_tuple( stat_t_id->id, symcode ));
-            if ( statit != idx.end() ) {
-              // found the currency in stat table, assuming this is a valid token
-              // get the balance for every account
-              for( auto accitr = symit->second.begin(); accitr != symit->second.end(); ++accitr ) {
-                account_name account_name = *accitr;
-                if( is_account_of_interest(account_name) ) {
-                  bool found = false;
-                  const auto* balance_t_id = db.find<chain::table_id_object, chain::by_code_scope_table>
-                    (boost::make_tuple( token_code, account_name, N(accounts) ));
-                  if( balance_t_id != nullptr ) {
-                    auto bal_entry = idx.find(boost::make_tuple( balance_t_id->id, symcode ));
-                    if ( bal_entry != idx.end() ) {
-                      found = true;
-                      asset bal;
-                      fc::datastream<const char *> ds(bal_entry->value.data(), bal_entry->value.size());
-                      fc::raw::unpack(ds, bal);
-                      if( bal.get_symbol().valid() ) {
-                        zao.currency_balances.emplace_back(currency_balance{account_name, token_code, bal});
-                      }
-                    }
-                  }
+          // found the currency in stat table, assuming this is a valid token
+          // get the balance for every account
+          for( auto accitr = symit->second.begin(); accitr != symit->second.end(); ++accitr ) {
+            account_name account_name = *accitr;
+            if( is_account_of_interest(account_name) ) {
+              bool found = false;
+              auto opt_bal= get_balance_by_contract( db, account_name, token_code, sym.to_symbol_code() );
+              asset bal = asset(0, sym);
+              asset stake = asset(0, sym);
+              asset refund = asset(0, sym);
+              if( opt_bal.valid() ){
+                found = true;
+                bal = *opt_bal;
+              } 
 
-                  if( !found ) {
-                    // assume the balance was emptied and the table entry was deleted
-                    zao.currency_balances.emplace_back(currency_balance{account_name, token_code, asset(0, sym), true});
+              if( token_code == N(eosio.token)){
+                abi_def abi;
+                if( abi_serializer::to_abi(code_account.abi, abi) ) {
+                  abi_serializer abis( abi, abi_serializer_max_time );
+                  auto opt_stake = get_stake(db, account_name, abis, abi_serializer_max_time);
+                  if( opt_stake.valid() ){
+                    found = true;
+                    stake = asset(*opt_stake, bal.get_symbol());
+                  }
+                  auto opt_refund = get_refund(db, account_name, abis, abi_serializer_max_time);
+                  if( opt_refund.valid() ){
+                    found = true;
+                    refund = *opt_refund;
                   }
                 }
+              }
+
+              if( found ) {
+                zao.currency_balances.emplace_back(currency_balance{account_name, token_code, bal, stake, refund});
+              } else {
+                // assume the balance was emptied and the table entry was deleted
+                zao.currency_balances.emplace_back(currency_balance{account_name, token_code, asset(0, sym), asset(0, sym), asset(0, sym), true});
               }
             }
           }
@@ -300,15 +397,15 @@ namespace eosio {
                                   std::set<name>& accounts,
                                   assetmoves& asset_moves)
     {      
-      accounts.insert(at.act.account);
+      // accounts.insert(at.act.account);
 
-      if( at.receipt.receiver != at.act.account ) {
-        accounts.insert(at.receipt.receiver);
-      }
+      // if( at.receipt.receiver != at.act.account ) {
+      //   accounts.insert(at.receipt.receiver);
+      // }
 
-      for(permission_level p : at.act.authorization) {
-        accounts.insert(p.actor);
-      }
+      // for(permission_level p : at.act.authorization) {
+      //   accounts.insert(p.actor);
+      // }
 
       try{
         if( at.act.account == config::system_account_name ) {
@@ -321,62 +418,62 @@ namespace eosio {
             break;
           case N(setcode):
             {
-              const auto data = fc::raw::unpack<chain::setcode>(at.act.data);
-              accounts.insert(data.account);
+              // const auto data = fc::raw::unpack<chain::setcode>(at.act.data);
+              // accounts.insert(data.account);
             }
             break;
           case N(setabi):
             {
-              const auto data = fc::raw::unpack<chain::setabi>(at.act.data);
-              accounts.insert(data.account);
+              // const auto data = fc::raw::unpack<chain::setabi>(at.act.data);
+              // accounts.insert(data.account);
             }
             break;
           case N(updateauth):
             {
-              const auto data = fc::raw::unpack<chain::updateauth>(at.act.data);
-              accounts.insert(data.account);
+              // const auto data = fc::raw::unpack<chain::updateauth>(at.act.data);
+              // accounts.insert(data.account);
             }
             break;
           case N(deleteauth):
             {
-              const auto data = fc::raw::unpack<chain::deleteauth>(at.act.data);
-              accounts.insert(data.account);
+              // const auto data = fc::raw::unpack<chain::deleteauth>(at.act.data);
+              // accounts.insert(data.account);
             }
             break;
           case N(linkauth):
             {
-              const auto data = fc::raw::unpack<chain::linkauth>(at.act.data);
-              accounts.insert(data.account);
+              // const auto data = fc::raw::unpack<chain::linkauth>(at.act.data);
+              // accounts.insert(data.account);
             }
             break;
           case N(unlinkauth):
             {
-              const auto data = fc::raw::unpack<chain::unlinkauth>(at.act.data);
-              accounts.insert(data.account);
+              // const auto data = fc::raw::unpack<chain::unlinkauth>(at.act.data);
+              // accounts.insert(data.account);
             }
             break;
           case N(buyrambytes):
             {
-              const auto data = fc::raw::unpack<zmqplugin::syscontract::buyrambytes>(at.act.data);
-              accounts.insert(data.payer);
-              if( data.receiver != data.payer ) {
-                accounts.insert(data.receiver);
-              }
+              // const auto data = fc::raw::unpack<zmqplugin::syscontract::buyrambytes>(at.act.data);
+              // accounts.insert(data.payer);
+              // if( data.receiver != data.payer ) {
+              //   accounts.insert(data.receiver);
+              // }
             }
             break;
           case N(buyram):
             {
-              const auto data = fc::raw::unpack<zmqplugin::syscontract::buyram>(at.act.data);
-              accounts.insert(data.payer);
-              if( data.receiver != data.payer ) {
-                accounts.insert(data.receiver);
-              }
+              // const auto data = fc::raw::unpack<zmqplugin::syscontract::buyram>(at.act.data);
+              // accounts.insert(data.payer);
+              // if( data.receiver != data.payer ) {
+              //   accounts.insert(data.receiver);
+              // }
             }
             break;
           case N(sellram):
             {
-              const auto data = fc::raw::unpack<zmqplugin::syscontract::sellram>(at.act.data);
-              accounts.insert(data.account);
+              // const auto data = fc::raw::unpack<zmqplugin::syscontract::sellram>(at.act.data);
+              // accounts.insert(data.account);
             }
             break;
           case N(delegatebw):
@@ -395,12 +492,15 @@ namespace eosio {
               if( data.receiver != data.from ) {
                 accounts.insert(data.receiver);
               }
+
+              add_asset_move(asset_moves, N(eosio.token), core_symbol, data.from);
+              add_asset_move(asset_moves, N(eosio.token), core_symbol, data.receiver);
             }
             break;
           case N(refund):
             {
-              const auto data = fc::raw::unpack<zmqplugin::syscontract::refund>(at.act.data);
-              accounts.insert(data.owner);
+              // const auto data = fc::raw::unpack<zmqplugin::syscontract::refund>(at.act.data);
+              // accounts.insert(data.owner);
             }
             break;
           case N(regproducer):
@@ -438,8 +538,8 @@ namespace eosio {
             break;
           case N(claimrewards):
             {
-              const auto data = fc::raw::unpack<zmqplugin::syscontract::claimrewards>(at.act.data);
-              accounts.insert(data.owner);
+              // const auto data = fc::raw::unpack<zmqplugin::syscontract::claimrewards>(at.act.data);
+              // accounts.insert(data.owner);
             }
             break;
           }
@@ -449,6 +549,9 @@ namespace eosio {
         case N(transfer):
           {
             const auto data = fc::raw::unpack<zmqplugin::token::transfer>(at.act.data);
+            accounts.insert(data.from);
+            accounts.insert(data.to);
+
             symbol s = data.quantity.get_symbol();
             if( s.valid() ) {
               add_asset_move(asset_moves, at.act.account, s, data.from);
@@ -459,6 +562,8 @@ namespace eosio {
         case N(issue):
           {
             const auto data = fc::raw::unpack<zmqplugin::token::issue>(at.act.data);
+            accounts.insert(data.to);
+
             symbol s = data.quantity.get_symbol();
             if( s.valid() ) {
               add_asset_move(asset_moves, at.act.account, s, data.to);
@@ -538,7 +643,7 @@ namespace eosio {
 
      get_balance_by_account_result get_balance_by_account( const get_balance_by_account_params& p )const;
 
-     void get_currency_by_account(zmq_accounts_info_object& zai, name account, name contract, symbol_code symcode)const;
+     void get_currency_by_account(zmq_accounts_info_object& zai, name account, name contract, symbol_code symcode, abi_serializer abis, const fc::microseconds abi_serializer_max_time)const;
 
      resource_balance get_resource_by_account(name account)const;
   };
@@ -616,24 +721,33 @@ namespace eosio {
 
     read_only::get_accounts_balance_result read_only::get_accounts_balance( const read_only::get_accounts_balance_params& p )const{
       zmq_accounts_info_object zai;
+      const auto& code_account = ct.db().get<account_object,by_name>( config::system_account_name );
+      abi_def abi;
+      
+      if( !abi_serializer::to_abi(code_account.abi, abi) ) return read_only::get_accounts_balance_result{"ok"};;
+      abi_serializer abis( abi, abi_serializer_max_time );
+
       uint64_t account_parse_counter = 1;
       const auto &account_list = ct.db().get_index<account_index,by_id>();
       for(auto itr = account_list.begin(); itr != account_list.end(); itr++, account_parse_counter++){
         auto account = itr->name;
-        zai.resource_balances.emplace_back(get_resource_by_account(account));
+
+        auto opt_voter_info = zmq_plugin_impl::get_voter_info(ct.db(), account, abis, abi_serializer_max_time);
+        if( opt_voter_info.valid() ) zai.voter_infos.emplace_back(*opt_voter_info);
+        // zai.resource_balances.emplace_back(get_resource_by_account(account));
         uint64_t counter = 1;
         for(auto t_itr = p.tokens.begin(); t_itr != p.tokens.end(); t_itr++,counter++){
-          get_currency_by_account(zai, account, t_itr->contract, t_itr->symbol);
-          if( counter%100==0 && (zai.resource_balances.size() !=0 || zai.currency_balances.size() != 0)){
+          get_currency_by_account(zai, account, t_itr->contract, t_itr->symbol,abis, abi_serializer_max_time);
+          if( counter%100==0 && (zai.voter_infos.size() !=0 || zai.currency_balances.size() != 0)){
             zmq_impl->send_msg(fc::json::to_string(zai), MSGTYPE_BALANCE_RESOURCE, 0);
-            zai.resource_balances.clear();
+            zai.voter_infos.clear();
             zai.currency_balances.clear();
           }
         }
 
-        if( zai.resource_balances.size() !=0 || zai.currency_balances.size() != 0){
+        if( zai.voter_infos.size() !=0 || zai.currency_balances.size() != 0){
           zmq_impl->send_msg(fc::json::to_string(zai), MSGTYPE_BALANCE_RESOURCE, 0);
-          zai.resource_balances.clear();
+          zai.voter_infos.clear();
           zai.currency_balances.clear();
         }
 
@@ -647,30 +761,56 @@ namespace eosio {
 
     read_only::get_balance_by_account_result read_only::get_balance_by_account( const read_only::get_balance_by_account_params& p )const{
       zmq_accounts_info_object zai;
-      zai.resource_balances.emplace_back(get_resource_by_account(p.account));
+      const auto& code_account = ct.db().get<account_object,by_name>( config::system_account_name );
+      abi_def abi;
+
+      if( !abi_serializer::to_abi(code_account.abi, abi) ) return read_only::get_balance_by_account_result{"ok"};
+      abi_serializer abis( abi, abi_serializer_max_time );
+      auto opt_voter_info = zmq_plugin_impl::get_voter_info(ct.db(), p.account, abis, abi_serializer_max_time );
+      if( opt_voter_info.valid() ) zai.voter_infos.emplace_back(*opt_voter_info);
+
+      // zai.resource_balances.emplace_back(get_resource_by_account(p.account));
       for(auto itr = p.tokens.begin(); itr != p.tokens.end(); itr++){
-        get_currency_by_account(zai, p.account, itr->contract, itr->symbol);
+        get_currency_by_account(zai, p.account, itr->contract, itr->symbol, abis, abi_serializer_max_time);
       }
       zmq_impl->send_msg(fc::json::to_string(zai), MSGTYPE_BALANCE_RESOURCE, 0);
       return read_only::get_balance_by_account_result{"ok"};
     }
 
-    void read_only::get_currency_by_account(zmq_accounts_info_object& zai, name account, name contract, symbol_code symcode)const{
+    void read_only::get_currency_by_account(zmq_accounts_info_object& zai, name account, name contract, symbol_code symcode, abi_serializer abis, const fc::microseconds abi_serializer_max_time)const{
       const auto& db = ct.db();
       const auto &idx = db.get_index<key_value_index, by_scope_primary>();
 
-      const auto* balance_t_id = db.find<chain::table_id_object, chain::by_code_scope_table>
-        (boost::make_tuple( contract, account, N(accounts) ));
-      if( balance_t_id != nullptr ) {
-        auto bal_entry = idx.find(boost::make_tuple( balance_t_id->id, symcode ));
-        if ( bal_entry != idx.end() ) {
-          asset bal;
-          fc::datastream<const char *> ds(bal_entry->value.data(), bal_entry->value.size());
-          fc::raw::unpack(ds, bal);
-          if( bal.get_symbol().valid() ) {
-            zai.currency_balances.emplace_back( currency_balance{account, contract, bal} );
-          }
+      asset bal = asset(0, core_symbol);
+      asset stake = asset(0, core_symbol);
+      asset refund = asset(0, core_symbol);
+      bool found = false;
+      // get eos balance
+      auto opt_bal = zmq_plugin_impl::get_balance_by_contract(db, account, contract, symcode );
+      if( opt_bal.valid() ) {
+        found = true;
+        bal = *opt_bal;
+      }
+
+      if( contract == N(eosio.token)){
+        auto opt_stake = zmq_plugin_impl::get_stake(db, account, abis, abi_serializer_max_time);
+        if( opt_stake.valid() ){
+          found = true;
+          stake = asset(*opt_stake, bal.get_symbol());
         }
+
+        auto opt_refund = zmq_plugin_impl::get_refund(db, account, abis, abi_serializer_max_time);
+        if( opt_refund.valid() ){
+          found = true;
+          refund = *opt_refund;
+        }
+      } else if(found) {
+        stake = asset(0, bal.get_symbol());
+        refund = asset(0, bal.get_symbol());
+      }
+
+      if(found){
+        zai.currency_balances.emplace_back( currency_balance{account, contract, bal, stake, refund} );
       }
     }
 
@@ -736,11 +876,14 @@ FC_REFLECT( zmqplugin::resource_balance,
             (account_name)(ram_quota)(ram_usage)(net_weight)(cpu_weight)(net_limit)(cpu_limit) )
 
 FC_REFLECT( zmqplugin::currency_balance,
-            (account_name)(contract)(balance)(deleted))
+            (account_name)(contract)(balance)(stake)(refund)(deleted))
+
+FC_REFLECT( zmqplugin::voter_info,
+            (owner)(proxy)(producers)(staked)(last_vote_weight)(proxied_vote_weight)(is_proxy)(reserved1)(reserved2)(reserved3) )
 
 FC_REFLECT( zmqplugin::zmq_action_object,
             (global_action_seq)(block_num)(block_time)(action_trace)
-            (resource_balances)(currency_balances)(last_irreversible_block) )
+            (resource_balances)(voter_infos)(currency_balances)(last_irreversible_block) )
 
 FC_REFLECT( zmqplugin::zmq_irreversible_block_object,
             (irreversible_block_num)(irreversible_block_digest) )
@@ -755,7 +898,7 @@ FC_REFLECT( zmqplugin::zmq_failed_transaction_object,
             (trx_id)(block_num)(status_name)(status_int) )
 
 FC_REFLECT( zmqplugin::zmq_accounts_info_object,
-            (resource_balances)(currency_balances))
+            (resource_balances)(voter_infos)(currency_balances))
 
 
 FC_REFLECT( eosio::zmq_apis::read_only::token_params,
