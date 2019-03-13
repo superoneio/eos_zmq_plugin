@@ -163,8 +163,11 @@ namespace eosio {
         if ( it != idx.end() ) {
           vector<char> data;
           copy_inline_row(*it, data);
-          auto voter = (abis.binary_to_variant( "voter_info", data, abi_serializer_max_time, true )).as<voter_info>();
-          opt_voter_info.emplace(voter);
+          auto voter = (abis.binary_to_variant( "voter_info", data, abi_serializer_max_time, true ));
+          opt_voter_info.emplace(voter_info{voter["owner"].as<name>(),voter["proxy"].as<name>(),
+              voter["producers"].as<std::vector<account_name>>(),voter["staked"].as<int64_t>(),
+              voter["last_vote_weight"].as<double>(),voter["proxied_vote_weight"].as<double>(),
+              voter["is_proxy"].as<bool>()});
         }
       }
       return opt_voter_info;
@@ -306,12 +309,17 @@ namespace eosio {
       // populate voter_infos
       for (auto accit = accounts.begin(); accit != accounts.end(); ++accit) {
         name account_name = *accit;
-        ilog("hi ${acc}",("acc",account_name));
         abi_def abi;
         if( abi_serializer::to_abi(code_account.abi, abi) ) {
-          abi_serializer abis( abi, abi_serializer_max_time );
-          auto opt_voter_info = zmq_plugin_impl::get_voter_info(db, account_name, abis, abi_serializer_max_time);
-          if( opt_voter_info.valid() ) zao.voter_infos.emplace_back(*opt_voter_info);
+          try{
+            abi_serializer abis( abi, abi_serializer_max_time );
+            auto opt_voter_info = zmq_plugin_impl::get_voter_info(db, account_name, abis, abi_serializer_max_time);
+            if( opt_voter_info.valid() ) zao.voter_infos.emplace_back(*opt_voter_info);
+          } catch (fc::exception e) {
+            elog("get voter info failed: ${details}, account: ${acc}",("details",e.what())("acc",account_name));
+          } catch (...){
+            elog("get voter info failed: ",("acc",account_name));
+          }
         }
       }
 
@@ -325,39 +333,47 @@ namespace eosio {
           // get the balance for every account
           for( auto accitr = symit->second.begin(); accitr != symit->second.end(); ++accitr ) {
             account_name account_name = *accitr;
-            if( is_account_of_interest(account_name) ) {
-              bool found = false;
-              auto opt_bal= get_balance_by_contract( db, account_name, token_code, sym.to_symbol_code() );
-              asset bal = asset(0, sym);
-              asset stake = asset(0, sym);
-              asset refund = asset(0, sym);
-              if( opt_bal.valid() ){
-                found = true;
-                bal = *opt_bal;
-              } 
 
-              if( token_code == N(eosio.token)){
-                abi_def abi;
-                if( abi_serializer::to_abi(code_account.abi, abi) ) {
-                  abi_serializer abis( abi, abi_serializer_max_time );
-                  auto opt_stake = get_stake(db, account_name, abis, abi_serializer_max_time);
-                  if( opt_stake.valid() ){
-                    found = true;
-                    stake = asset(*opt_stake, bal.get_symbol());
-                  }
-                  auto opt_refund = get_refund(db, account_name, abis, abi_serializer_max_time);
-                  if( opt_refund.valid() ){
-                    found = true;
-                    refund = *opt_refund;
+            // ilog("${contract} ${sym} ${acc}",("contract",token_code)("sym",sym)("acc",account_name));
+            if( is_account_of_interest(account_name) ) {
+              try{
+                bool found = false;
+                auto opt_bal= get_balance_by_contract( db, account_name, token_code, sym.to_symbol_code() );
+                asset bal = asset(0, sym);
+                asset stake = asset(0, sym);
+                asset refund = asset(0, sym);
+                if( opt_bal.valid() ){
+                  found = true;
+                  bal = *opt_bal;
+                } 
+
+                if( token_code == N(eosio.token)){
+                  abi_def abi;
+                  if( abi_serializer::to_abi(code_account.abi, abi) ) {
+                    abi_serializer abis( abi, abi_serializer_max_time );
+                    auto opt_stake = get_stake(db, account_name, abis, abi_serializer_max_time);
+                    if( opt_stake.valid() ){
+                      found = true;
+                      stake = asset(*opt_stake, bal.get_symbol());
+                    }
+                    auto opt_refund = get_refund(db, account_name, abis, abi_serializer_max_time);
+                    if( opt_refund.valid() ){
+                      found = true;
+                      refund = *opt_refund;
+                    }
                   }
                 }
-              }
 
-              if( found ) {
-                zao.currency_balances.emplace_back(currency_balance{account_name, token_code, bal, stake, refund});
-              } else {
-                // assume the balance was emptied and the table entry was deleted
-                zao.currency_balances.emplace_back(currency_balance{account_name, token_code, asset(0, sym), asset(0, sym), asset(0, sym), true});
+                if( found ) {
+                  zao.currency_balances.emplace_back(currency_balance{account_name, token_code, bal, stake, refund});
+                } else {
+                  // assume the balance was emptied and the table entry was deleted
+                  zao.currency_balances.emplace_back(currency_balance{account_name, token_code, asset(0, sym), asset(0, sym), asset(0, sym), true});
+                }
+              } catch (fc::exception e) {
+                elog("get voter info failed: ${details}, account: ${acc}",("details",e.what())("acc",account_name));
+              } catch (...){
+                elog("get voter info failed: ",("acc",account_name));
               }
             }
           }
@@ -483,6 +499,9 @@ namespace eosio {
               if( data.receiver != data.from ) {
                 accounts.insert(data.receiver);
               }
+
+              add_asset_move(asset_moves, N(eosio.token), core_symbol, data.from);
+              add_asset_move(asset_moves, N(eosio.token), core_symbol, data.receiver);
             }
             break;
           case N(undelegatebw):
@@ -879,7 +898,7 @@ FC_REFLECT( zmqplugin::currency_balance,
             (account_name)(contract)(balance)(stake)(refund)(deleted))
 
 FC_REFLECT( zmqplugin::voter_info,
-            (owner)(proxy)(producers)(staked)(last_vote_weight)(proxied_vote_weight)(is_proxy)(reserved1)(reserved2)(reserved3) )
+            (owner)(proxy)(producers)(staked)(last_vote_weight)(proxied_vote_weight)(is_proxy) )
 
 FC_REFLECT( zmqplugin::zmq_action_object,
             (global_action_seq)(block_num)(block_time)(action_trace)

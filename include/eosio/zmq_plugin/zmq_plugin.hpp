@@ -129,10 +129,6 @@ namespace zmqplugin {
     double                    last_vote_weight;
     double                    proxied_vote_weight;
     bool                      is_proxy;
-
-    uint32_t                  reserved1 = 0;
-    uint32_t                  reserved2 = 0;
-    asset                     reserved3;
   };
 
   struct zmq_action_object {
