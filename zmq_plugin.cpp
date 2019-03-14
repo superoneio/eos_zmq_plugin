@@ -568,8 +568,8 @@ namespace eosio {
         case N(transfer):
           {
             const auto data = fc::raw::unpack<zmqplugin::token::transfer>(at.act.data);
-            accounts.insert(data.from);
-            accounts.insert(data.to);
+            // accounts.insert(data.from);
+            // accounts.insert(data.to);
 
             symbol s = data.quantity.get_symbol();
             if( s.valid() ) {
@@ -581,7 +581,7 @@ namespace eosio {
         case N(issue):
           {
             const auto data = fc::raw::unpack<zmqplugin::token::issue>(at.act.data);
-            accounts.insert(data.to);
+            // accounts.insert(data.to);
 
             symbol s = data.quantity.get_symbol();
             if( s.valid() ) {
