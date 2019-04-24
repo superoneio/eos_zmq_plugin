@@ -52,6 +52,50 @@ namespace zmqplugin {
       account_name owner;
     };
 
+    struct withdraw {
+      account_name owner;
+      asset        amount;
+    };
+
+    struct buyrex{
+      account_name from;
+      asset        amount;
+    };
+
+    struct unstaketorex{
+      account_name owner;
+      account_name receiver;
+      asset        from_net;
+      asset        from_cpu;
+    };
+
+    struct sellrex {
+      account_name from;
+      asset        rex;
+    };
+
+    struct updaterex {
+      account_name owner;
+    };
+
+    struct consolidate {
+      account_name owner;
+    };
+
+    struct mvtosavings {
+      account_name owner;
+      asset        rex;
+    };
+
+    struct mvfrsavings {
+      account_name owner;
+      asset        rex;
+    };
+
+    struct closerex {
+      account_name owner;
+    };
+
     struct regproducer {
       account_name producer;
       public_key_type producer_key;
