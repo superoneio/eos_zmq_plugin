@@ -522,6 +522,82 @@ namespace eosio {
               // accounts.insert(data.owner);
             }
             break;
+          case N(withdraw):
+            {
+              const auto data = fc::raw::unpack<zmqplugin::syscontract::withdraw>(at.act.data);
+              accounts.insert(data.owner);
+
+              add_asset_move(asset_moves, N(eosio.token), core_symbol, data.owner);
+            }
+            break;
+          case N(buyrex):
+            {
+              const auto data = fc::raw::unpack<zmqplugin::syscontract::buyrex>(at.act.data);
+              accounts.insert(data.from);
+
+              add_asset_move(asset_moves, N(eosio.token), core_symbol, data.from);
+            }
+            break;
+          case N(unstaketorex):
+            {
+              const auto data = fc::raw::unpack<zmqplugin::syscontract::unstaketorex>(at.act.data);
+              accounts.insert(data.owner);
+              if( data.receiver != data.receiver ) {
+                accounts.insert(data.receiver);
+              }
+
+              add_asset_move(asset_moves, N(eosio.token), core_symbol, data.owner);
+              add_asset_move(asset_moves, N(eosio.token), core_symbol, data.receiver);
+            }
+            break;
+          case N(sellrex):
+            {
+              const auto data = fc::raw::unpack<zmqplugin::syscontract::sellrex>(at.act.data);
+              accounts.insert(data.from);
+
+              add_asset_move(asset_moves, N(eosio.token), core_symbol, data.from);
+            }
+            break;
+          case N(updaterex):
+            {
+              const auto data = fc::raw::unpack<zmqplugin::syscontract::updaterex>(at.act.data);
+              accounts.insert(data.owner);
+
+              add_asset_move(asset_moves, N(eosio.token), core_symbol, data.owner);
+            }
+            break;
+          case N(consolidate):
+            {
+              const auto data = fc::raw::unpack<zmqplugin::syscontract::consolidate>(at.act.data);
+              accounts.insert(data.owner);
+
+              add_asset_move(asset_moves, N(eosio.token), core_symbol, data.owner);
+            }
+            break;
+          case N(mvtosavings):
+            {
+              const auto data = fc::raw::unpack<zmqplugin::syscontract::mvtosavings>(at.act.data);
+              accounts.insert(data.owner);
+
+              add_asset_move(asset_moves, N(eosio.token), core_symbol, data.owner);
+            }
+            break;
+          case N(mvfrsavings):
+            {
+              const auto data = fc::raw::unpack<zmqplugin::syscontract::mvfrsavings>(at.act.data);
+              accounts.insert(data.owner);
+
+              add_asset_move(asset_moves, N(eosio.token), core_symbol, data.owner);
+            }
+            break;
+          case N(closerex):
+            {
+              const auto data = fc::raw::unpack<zmqplugin::syscontract::closerex>(at.act.data);
+              accounts.insert(data.owner);
+
+              add_asset_move(asset_moves, N(eosio.token), core_symbol, data.owner);
+            }
+            break;
           case N(regproducer):
             {
               const auto data = fc::raw::unpack<zmqplugin::syscontract::regproducer>(at.act.data);
@@ -865,6 +941,34 @@ FC_REFLECT( zmqplugin::syscontract::undelegatebw,
             (from)(receiver)(unstake_net_quantity)(unstake_cpu_quantity) )
 
 FC_REFLECT( zmqplugin::syscontract::refund,
+            (owner) )
+
+// rex
+FC_REFLECT( zmqplugin::syscontract::withdraw,
+            (owner)(amount) )
+
+FC_REFLECT( zmqplugin::syscontract::buyrex,
+            (from)(amount) )
+
+FC_REFLECT( zmqplugin::syscontract::unstaketorex,
+            (owner)(receiver)(from_net)(from_cpu) )
+
+FC_REFLECT( zmqplugin::syscontract::sellrex,
+            (from)(rex) )
+
+FC_REFLECT( zmqplugin::syscontract::updaterex,
+            (owner) )
+
+FC_REFLECT( zmqplugin::syscontract::consolidate,
+            (owner) )
+
+FC_REFLECT( zmqplugin::syscontract::mvtosavings,
+            (owner)(rex) )
+
+FC_REFLECT( zmqplugin::syscontract::mvfrsavings,
+            (owner)(rex) )
+
+FC_REFLECT( zmqplugin::syscontract::closerex,
             (owner) )
 
 FC_REFLECT( zmqplugin::syscontract::regproducer,
