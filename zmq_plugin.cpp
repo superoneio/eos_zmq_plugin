@@ -38,7 +38,7 @@ namespace eosio {
             try { \
               if (body.empty()) body = "{}"; \
               auto result = api_handle.call_name(fc::json::from_string(body).as<api_namespace::call_name ## _params>()); \
-              cb(200, fc::json::to_string(result, fc::time_point::now() + fc::exception::format_time_limit); \
+              cb(200, fc::json::to_string(result,fc::time_point::now() + fc::exception::format_time_limit)); \
             } catch (...) { \
               http_plugin::handle_exception(#api_name, #call_name, body, cb); \
             } \
