@@ -315,7 +315,7 @@ namespace eosio {
       auto& chain = chain_plug->chain();
 
       zmq_action_object zao;
-      zao.global_action_seq = at.receipt.global_sequence;
+      zao.global_action_seq =  at.receipt->global_sequence
       zao.block_num = block_state->block->block_num();
       zao.block_time = block_state->block->timestamp;
       zao.action_trace = chain.to_variant_with_abi(at, abi_serializer_max_time);
@@ -438,7 +438,7 @@ namespace eosio {
       }
 
       if( at.act.account == config::system_account_name ) {
-        switch((uint64_t) at.act.name) {
+        switch(at.act.name.to_uint64_t()) {
         case N(newaccount):
           {
             const auto data = fc::raw::unpack<chain::newaccount>(at.act.data);
@@ -571,8 +571,8 @@ namespace eosio {
         }
       }
 
-      switch((uint64_t) at.act.name) {
-      case N(transfer):
+      switch(at.act.name..to_uint64_t()) {
+    case N(transfer):
         {
           const auto data = fc::raw::unpack<zmqplugin::token::transfer>(at.act.data);
           symbol s = data.quantity.get_symbol();
@@ -601,9 +601,10 @@ namespace eosio {
         break;
       }
 
-      for( const auto& iline : at.inline_traces ) {
+      //no inline trance in 2.0
+      /*for( const auto& iline : at.inline_traces ) {
         find_accounts_and_tokens( iline, accounts, asset_moves );
-      }
+      }*/
     }
 
 
