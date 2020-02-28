@@ -400,7 +400,7 @@ namespace eosio {
       
       try{
 
-        name action_name = at.act.name
+        name action_name = at.act.name;
         if( at.act.account == config::system_account_name ) {
           if(action_name == N(newaccount){
               const auto data = fc::raw::unpack<chain::newaccount>(at.act.data);
