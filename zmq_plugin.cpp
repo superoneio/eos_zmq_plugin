@@ -402,7 +402,7 @@ namespace eosio {
 
         name action_name = at.act.name;
         if( at.act.account == config::system_account_name ) {
-          if(action_name == N(newaccount){
+          if(action_name == N(newaccount)){
               const auto data = fc::raw::unpack<chain::newaccount>(at.act.data);
               accounts.insert(data.name);
           }else if(action_name == N(delegatebw)){
@@ -503,7 +503,7 @@ namespace eosio {
             if( s.valid() ) {
               add_asset_move(asset_moves, at.act.account, s, data.to);
             }
-        }else if(action_nme == N(open)){
+        }else if(action_name == N(open)){
             const auto data = fc::raw::unpack<zmqplugin::token::open>(at.act.data);
             if( data.symbol.valid() ) {
               add_asset_move(asset_moves, at.act.account, data.symbol, data.owner);
@@ -577,7 +577,6 @@ namespace eosio {
 
      void get_currency_by_account(zmq_accounts_info_object& zai, name account, name contract, symbol_code symcode, abi_serializer abis, const fc::microseconds abi_serializer_max_time)const;
 
-     resource_balance get_resource_by_account(name account)const;
   };
 
   }
@@ -744,19 +743,6 @@ namespace eosio {
       if(found){
         zai.currency_balances.emplace_back( currency_balance{account, contract, bal, stake, refund} );
       }
-    }
-
-    resource_balance read_only::get_resource_by_account(name account)const{
-      const auto& rm = ct.get_resource_limits_manager();
-
-      resource_balance bal;
-      bal.account_name = account;
-      rm.get_account_limits( account, bal.ram_quota, bal.net_weight, bal.cpu_weight );
-      bool grelisted = ct.is_resource_greylisted(account);
-      bal.net_limit = rm.get_account_net_limit_ex( account, !grelisted).first;
-      bal.cpu_limit = rm.get_account_cpu_limit_ex( account, !grelisted).frist;
-      bal.ram_usage = rm.get_account_ram_usage( account );
-      return bal;
     }
 
   }
