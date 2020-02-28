@@ -753,8 +753,8 @@ namespace eosio {
       bal.account_name = account;
       rm.get_account_limits( account, bal.ram_quota, bal.net_weight, bal.cpu_weight );
       bool grelisted = ct.is_resource_greylisted(account);
-      bal.net_limit = rm.get_account_net_limit_ex( account, !grelisted);
-      bal.cpu_limit = rm.get_account_cpu_limit_ex( account, !grelisted);
+      bal.net_limit = rm.get_account_net_limit_ex( account, !grelisted).first;
+      bal.cpu_limit = rm.get_account_cpu_limit_ex( account, !grelisted).frist;
       bal.ram_usage = rm.get_account_ram_usage( account );
       return bal;
     }
