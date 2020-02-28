@@ -154,22 +154,18 @@ This plugin depends on:
 
 
 ```bash
-apt-get install -y pkg-config libzmq5-dev
+apt-get install -y pkg-config libzmq5-dev libnorm-dev
 mkdir ${HOME}/build
 cd ${HOME}/build/
 git clone https://github.com/cc32d9/eos_zmq_plugin.git
 git clone https://github.com/EOSIO/eos --recursive
 cd eos
-#
-# edit eosio_build.sh according to
-# https://github.com/EOSIO/eos/issues/5229
-vi eosio_build.sh
 
 # compile EOS suite
-LOCAL_CMAKE_FLAGS="-DEOSIO_ADDITIONAL_PLUGINS=${HOME}/build/eos_zmq_plugin" ./eosio_build.sh
+LOCAL_CMAKE_FLAGS="-DEOSIO_ADDITIONAL_PLUGINS=${HOME}/build/eos_zmq_plugin" ./scripts/eosio_build.sh
 
 # insttall
-sudo ./eosio_install.sh
+sudo ./scripts/eosio_install.sh
 ```
 
 
