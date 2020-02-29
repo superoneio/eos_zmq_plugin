@@ -123,7 +123,7 @@ namespace eosio {
 
       const auto* balance_t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( N(eosio), N(eosio), N(voters) ));
       if( balance_t_id != nullptr ) {
-        auto it = idx.find(boost::make_tuple( balance_t_id->id, account ));
+        auto it = idx.find(boost::make_tuple( balance_t_id->id, account.to_uint64_t() ));
         if ( it != idx.end() ) {
           vector<char> data;
           copy_inline_row(*it, data);
@@ -141,7 +141,7 @@ namespace eosio {
 
       const auto* balance_t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( N(eosio), account, N(refunds) ));
       if( balance_t_id != nullptr ) {
-        auto it = idx.find(boost::make_tuple( balance_t_id->id, account ));
+        auto it = idx.find(boost::make_tuple( balance_t_id->id, account.to_uint64_t() ));
         if ( it != idx.end() ) {
           vector<char> data;
           copy_inline_row(*it, data);
@@ -159,7 +159,7 @@ namespace eosio {
 
       const auto* balance_t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( N(eosio), N(eosio), N(voters) ));
       if( balance_t_id != nullptr ) {
-        auto it = idx.find(boost::make_tuple( balance_t_id->id, account ));
+        auto it = idx.find(boost::make_tuple( balance_t_id->id, account.to_uint64_t() ));
         if ( it != idx.end() ) {
           vector<char> data;
           copy_inline_row(*it, data);
@@ -186,11 +186,13 @@ namespace eosio {
     }
 
 
-    void on_applied_transaction( const transaction_trace_ptr& p )
+    void on_applied_transaction( std::tuple<const transaction_trace_ptr&, const signed_transaction&> p)
     {
-      if (p->receipt) {
-        cached_traces[p->id] = p;
-      }
+    
+       const transaction_trace_ptr& tx_trace = std::get<0>(p);
+        if (tx_trace->receipt) {
+            cached_traces[tx_trace->id] = tx_trace;
+        }
     }
 
 
@@ -541,7 +543,7 @@ namespace eosio {
   class read_only {
      const controller& ct;
      const fc::microseconds abi_serializer_max_time;
-     bool  shorten_abi_errors = true;
+    //bool  shorten_abi_errors = true;
      std::shared_ptr<zmq_plugin_impl> zmq_impl;
 
   public:
@@ -620,7 +622,7 @@ namespace eosio {
     auto& chain = my->chain_plug->chain();
 
     my->applied_transaction_connection.emplace
-      ( chain.applied_transaction.connect( [&]( const transaction_trace_ptr& p ){
+      ( chain.applied_transaction.connect( [&]( std::tuple<const transaction_trace_ptr&, const signed_transaction&> p  ){
           my->on_applied_transaction(p);  }));
 
     my->accepted_block_connection.emplace
