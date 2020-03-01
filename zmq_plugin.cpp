@@ -97,7 +97,7 @@ namespace eosio {
       memcpy( data.data(), obj.value.data(), obj.value.size() );
     }
 
-    static optional<asset> get_balance_by_contract( const chainbase::database& db, name account, name contract, symbol_code symcode ){
+static optional<asset> get_balance_by_contract( const chainbase::database& db, name account, name contract, symbol_code symcode ){
       const auto &idx = db.get_index<key_value_index, by_scope_primary>();
       optional<asset> opt_bal;
 
@@ -268,7 +268,7 @@ namespace eosio {
       auto& chain = chain_plug->chain();
 
       zmq_action_object zao;
-      zao.global_action_seq =  at.receipt->global_sequence;
+      zao.global_action_seq = at.receipt->global_sequence;
       zao.block_num = block_state->block->block_num();
       zao.block_time = block_state->block->timestamp;
       zao.action_trace = chain.to_variant_with_abi(at, abi_serializer_max_time);
@@ -286,11 +286,7 @@ namespace eosio {
         if( !whitelist_matched )
           return;
       }
-
-      const auto& db = chain.db();
-      const auto& code_account = db.get<account_object,by_name>( config::system_account_name );
-      const auto& idx = db.get_index<key_value_index, by_scope_primary>(); 
-      const auto& rm = chain.get_resource_limits_manager();
+        
       const auto& db = chain.db();
       const auto& code_account = db.get<account_object,by_name>( config::system_account_name );
       const auto &idx = db.get_index<key_value_index, by_scope_primary>();
@@ -298,46 +294,16 @@ namespace eosio {
       // populate voter_infos
       for (auto accit = accounts.begin(); accit != accounts.end(); ++accit) {
         name account_name = *accit;
-        if( is_account_of_interest(account_name) ) {
-          abi_def abi;
-          if( abi_serializer::to_abi(code_account.abi, abi) ) {
+        abi_def abi;
+        if( abi_serializer::to_abi(code_account.abi, abi) ) {
+          try{
             abi_serializer abis( abi, abi_serializer_max_time );
-
-            const auto &idx = db.get_index<key_value_index, by_scope_primary>();
-            auto t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( config::system_account_name, account_name, N(delband) ));
-            if (t_id != nullptr) {
-              auto it = idx.find(boost::make_tuple( t_id->id, account_name.to_uint64_t() ));
-              if ( it != idx.end() ) {
-                stake_info stk;
-                vector<char> data;
-                copy_inline_row(*it, data);
-                auto self_delegatebw = abis.binary_to_variant( "delegated_bandwidth", data, abi_serializer_max_time, true );
-                stk.account_name = account_name;
-                stk.cpu_stake_by_self = self_delegatebw["cpu_weight"].as<asset>();
-                stk.net_stake_by_self = self_delegatebw["net_weight"].as<asset>();
-                zao.stakes.emplace_back(stk);
-              }
-            }
-
-            t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( config::system_account_name, account_name, N(refunds) ));
-            if (t_id != nullptr) {
-              auto it = idx.find(boost::make_tuple( t_id->id, account_name.to_uint64_t() ));
-              if ( it != idx.end() ) {
-                vector<char> data;
-                copy_inline_row(*it, data);
-                zao.refunds.emplace_back(abis.binary_to_variant( "refund_request", data, abi_serializer_max_time, true ).as<refund_info>()); 
-              }
-            }
-
-            t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( config::system_account_name, config::system_account_name, N(voters) ));
-            if (t_id != nullptr) {
-              auto it = idx.find(boost::make_tuple( t_id->id, account_name.to_uint64_t() ));
-              if ( it != idx.end() ) {
-                vector<char> data;
-                copy_inline_row(*it, data);
-                zao.voters.emplace_back(abis.binary_to_variant( "voter_info", data, abi_serializer_max_time, true ).as<voter_info>());
-              }
-            }
+            auto opt_voter_info = zmq_plugin_impl::get_voter_info(db, account_name, abis, abi_serializer_max_time);
+            if( opt_voter_info.valid() ) zao.voter_infos.emplace_back(*opt_voter_info);
+          } catch (fc::exception e) {
+            elog("get voter info failed: ${details}, account: ${acc}",("details",e.what())("acc",account_name));
+          } catch (...){
+            elog("get voter info failed: ",("acc",account_name));
           }
         }
       }
@@ -400,7 +366,7 @@ namespace eosio {
       }
 
       zao.last_irreversible_block = chain.last_irreversible_block_num();
-      send_msg(fc::json::to_string(zao, fc::time_point::now() + fc::exception::format_time_limit), MSGTYPE_ACTION_TRACE, 0);
+      send_msg(fc::json::to_string(zao,fc::time_point::now() + fc::exception::format_time_limit), MSGTYPE_ACTION_TRACE, 0);
     }
 
 
@@ -849,15 +815,6 @@ FC_REFLECT( zmqplugin::token::open,
 
 FC_REFLECT( zmqplugin::resource_balance,
             (account_name)(ram_quota)(ram_usage)(net_weight)(cpu_weight)(net_limit)(cpu_limit) )
-
-FC_REFLECT( zmqplugin::stake_info,
-            (account_name)(cpu_stake_by_self)(net_stake_by_self) )
-
-FC_REFLECT( zmqplugin::refund_info,
-            (owner)(request_time)(net_amount)(cpu_amount) )
-
-FC_REFLECT( zmqplugin::voter_info,
-            (owner)(proxy)(producers)(staked)(last_vote_weight)(proxied_vote_weight)(is_proxy)(reserved1)(reserved2)(reserved3) )
 
 FC_REFLECT( zmqplugin::currency_balance,
             (account_name)(contract)(balance)(stake)(refund)(deleted))
