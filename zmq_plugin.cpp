@@ -23,6 +23,181 @@ namespace {
   const int32_t MSGTYPE_BALANCE_RESOURCE = 5;
 }
 
+namespace zmqplugin {
+  using namespace eosio;
+  using namespace eosio::chain;
+  using account_resource_limit = chain::resource_limits::account_resource_limit;
+
+  // these structures are not defined in contract_types.hpp, so we define them here
+  namespace syscontract {
+
+    struct buyrambytes {
+      account_name payer;
+      account_name receiver;
+      uint32_t bytes;
+    };
+
+    struct buyram {
+      account_name payer;
+      account_name receiver;
+      asset quant;
+    };
+
+    struct sellram {
+      account_name account;
+      uint64_t bytes;
+    };
+
+    struct delegatebw {
+      account_name from;
+      account_name receiver;
+      asset stake_net_quantity;
+      asset stake_cpu_quantity;
+      bool transfer;
+    };
+
+    struct undelegatebw {
+      account_name from;
+      account_name receiver;
+      asset unstake_net_quantity;
+      asset unstake_cpu_quantity;
+    };
+
+    struct refund {
+      account_name owner;
+    };
+
+    struct regproducer {
+      account_name producer;
+      public_key_type producer_key;
+      string url;
+      uint16_t location;
+    };
+
+    struct unregprod {
+      account_name producer;
+    };
+
+    struct regproxy {
+      account_name proxy;
+      bool isproxy;
+    };
+
+    struct voteproducer {
+      account_name voter;
+      account_name proxy;
+      std::vector<account_name> producers;
+    };
+
+    struct claimrewards {
+      account_name owner;
+    };
+  }
+
+  namespace token {
+    struct transfer {
+      account_name from;
+      account_name to;
+      asset quantity;
+      string memo;
+    };
+
+    struct issue {
+      account_name to;
+      asset quantity;
+      string memo;
+    };
+
+    struct open {
+      account_name owner;
+      symbol symbol;
+      account_name ram_payer;
+    };
+  }
+
+  typedef std::map<account_name,std::map<symbol,std::set<account_name>>> assetmoves;
+
+  struct resource_balance {
+    name                       account_name;
+    int64_t                    ram_quota  = 0;
+    int64_t                    ram_usage = 0;
+    int64_t                    net_weight = 0;
+    int64_t                    cpu_weight = 0;
+    account_resource_limit     net_limit;
+    account_resource_limit     cpu_limit;
+  };
+
+  struct currency_balance {
+    name                       account_name;
+    name                       contract;
+    asset                      balance;
+    bool                       deleted = false;
+  };
+
+  struct stake_info {
+    name  account_name;
+    asset cpu_stake_by_self;
+    asset net_stake_by_self;
+  };
+
+  struct refund_info {
+    name           owner;
+    time_point_sec request_time;
+    asset          net_amount;
+    asset          cpu_amount;
+  };
+
+  struct voter_info {
+    name          owner;
+    name          proxy;
+    vector<name>  producers;
+    int64_t       staked;
+    double        last_vote_weight;
+    double        proxied_vote_weight;
+    bool          is_proxy;
+    uint32_t      reserved1;
+    uint32_t      reserved2;
+    eosio::asset  reserved3;
+  };
+
+  struct zmq_action_object {
+    uint64_t                     global_action_seq;
+    block_num_type               block_num;
+    chain::block_timestamp_type  block_time;
+    fc::variant                  action_trace;
+    vector<resource_balance>     resource_balances;
+    vector<currency_balance>     currency_balances;
+    vector<stake_info>           stakes;
+    vector<refund_info>          refunds;
+    vector<voter_info>           voters;
+    uint32_t                     last_irreversible_block;
+  };
+
+  struct zmq_irreversible_block_object {
+    block_num_type               irreversible_block_num;
+    digest_type                  irreversible_block_digest;
+  };
+
+  struct zmq_fork_block_object {
+    block_num_type                    invalid_block_num;
+  };
+
+  struct zmq_accepted_block_object {
+    block_num_type               accepted_block_num;
+    block_timestamp_type         accepted_block_timestamp;
+    account_name                 accepted_block_producer;
+    digest_type                  accepted_block_digest;
+  };
+
+  // see status definitions in libraries/chain/include/eosio/chain/block.hpp
+  struct zmq_failed_transaction_object {
+    string                                         trx_id;
+    block_num_type                                 block_num;
+    eosio::chain::transaction_receipt::status_enum status_name; // enum
+    uint8_t                                        status_int;  // the same as status, but integer
+  };
+}
+
 namespace eosio {
   using namespace chain;
   using namespace zmqplugin;
@@ -286,7 +461,10 @@ namespace eosio {
         if( !whitelist_matched )
           return;
       }
-        
+
+      const auto& db = chain.db();
+      const auto& code_account = db.get<account_object,by_name>( config::system_account_name );
+      const auto& idx = db.get_index<key_value_index, by_scope_primary>(); 
       const auto& rm = chain.get_resource_limits_manager();
       const auto& db = chain.db();
       const auto& code_account = db.get<account_object,by_name>( config::system_account_name );
@@ -295,16 +473,55 @@ namespace eosio {
       // populate voter_infos
       for (auto accit = accounts.begin(); accit != accounts.end(); ++accit) {
         name account_name = *accit;
-        abi_def abi;
-        if( abi_serializer::to_abi(code_account.abi, abi) ) {
-          try{
+        if( is_account_of_interest(account_name) ) {
+          resource_balance bal;
+          bal.account_name = account_name;
+          rm.get_account_limits( account_name, bal.ram_quota, bal.net_weight, bal.cpu_weight );
+          bool grelisted = chain.is_resource_greylisted(account_name);
+          bal.net_limit = rm.get_account_net_limit_ex( account_name, !grelisted);
+          bal.cpu_limit = rm.get_account_cpu_limit_ex( account_name, !grelisted);
+          bal.ram_usage = rm.get_account_ram_usage( account_name );
+          zao.resource_balances.emplace_back(bal);
+
+          abi_def abi;
+          if( abi_serializer::to_abi(code_account.abi, abi) ) {
             abi_serializer abis( abi, abi_serializer_max_time );
-            auto opt_voter_info = zmq_plugin_impl::get_voter_info(db, account_name, abis, abi_serializer_max_time);
-            if( opt_voter_info.valid() ) zao.voter_infos.emplace_back(*opt_voter_info);
-          } catch (fc::exception e) {
-            elog("get voter info failed: ${details}, account: ${acc}",("details",e.what())("acc",account_name));
-          } catch (...){
-            elog("get voter info failed: ",("acc",account_name));
+
+            const auto &idx = db.get_index<key_value_index, by_scope_primary>();
+            auto t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( config::system_account_name, account_name, N(delband) ));
+            if (t_id != nullptr) {
+              auto it = idx.find(boost::make_tuple( t_id->id, account_name ));
+              if ( it != idx.end() ) {
+                stake_info stk;
+                vector<char> data;
+                copy_inline_row(*it, data);
+                auto self_delegatebw = abis.binary_to_variant( "delegated_bandwidth", data, abi_serializer_max_time, true );
+                stk.account_name = account_name;
+                stk.cpu_stake_by_self = self_delegatebw["cpu_weight"].as<asset>();
+                stk.net_stake_by_self = self_delegatebw["net_weight"].as<asset>();
+                zao.stakes.emplace_back(stk);
+              }
+            }
+
+            t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( config::system_account_name, account_name, N(refunds) ));
+            if (t_id != nullptr) {
+              auto it = idx.find(boost::make_tuple( t_id->id, account_name ));
+              if ( it != idx.end() ) {
+                vector<char> data;
+                copy_inline_row(*it, data);
+                zao.refunds.emplace_back(abis.binary_to_variant( "refund_request", data, abi_serializer_max_time, true ).as<refund_info>()); 
+              }
+            }
+
+            t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( config::system_account_name, config::system_account_name, N(voters) ));
+            if (t_id != nullptr) {
+              auto it = idx.find(boost::make_tuple( t_id->id, account_name ));
+              if ( it != idx.end() ) {
+                vector<char> data;
+                copy_inline_row(*it, data);
+                zao.voters.emplace_back(abis.binary_to_variant( "voter_info", data, abi_serializer_max_time, true ).as<voter_info>());
+              }
+            }
           }
         }
       }
@@ -440,7 +657,6 @@ namespace eosio {
               if( data.receiver != data.receiver ) {
                 accounts.insert(data.receiver);
               }
-
               add_asset_move(asset_moves, N(eosio.token), core_symbol, data.owner);
               add_asset_move(asset_moves, N(eosio.token), core_symbol, data.receiver);
           }else if(action_name == N(sellrex)){
@@ -599,6 +815,7 @@ namespace eosio {
 
   void zmq_plugin::plugin_initialize(const variables_map& options)
   {
+    ilog("zmq_plugin init");
     my->socket_bind_str = options.at(SENDER_BIND_OPT).as<string>();
     if (my->socket_bind_str.empty()) {
       wlog("zmq-sender-bind not specified => eosio::zmq_plugin disabled.");
@@ -635,12 +852,14 @@ namespace eosio {
   }
 
   void zmq_plugin::plugin_startup() {
+
     auto ro_api = zmq_apis::read_only(my->chain_plug->chain(),my->chain_plug->get_abi_serializer_max_time(), my);
 
     app().get_plugin<http_plugin>().add_api({
         CHAIN_RO_CALL(get_accounts_balance),
         CHAIN_RO_CALL(get_balance_by_account)
     });
+    ilog("zmq_plugin start");
   }
 
   void zmq_plugin::plugin_shutdown() {
@@ -648,6 +867,7 @@ namespace eosio {
       my->sender_socket.disconnect(my->socket_bind_str);
       my->sender_socket.close();
     }
+    ilog("zmq_plugin shutdown");
   }
 
   namespace zmq_apis{
@@ -822,6 +1042,15 @@ FC_REFLECT( zmqplugin::token::open,
 
 FC_REFLECT( zmqplugin::resource_balance,
             (account_name)(ram_quota)(ram_usage)(net_weight)(cpu_weight)(net_limit)(cpu_limit) )
+
+FC_REFLECT( zmqplugin::stake_info,
+            (account_name)(cpu_stake_by_self)(net_stake_by_self) )
+
+FC_REFLECT( zmqplugin::refund_info,
+            (owner)(request_time)(net_amount)(cpu_amount) )
+
+FC_REFLECT( zmqplugin::voter_info,
+            (owner)(proxy)(producers)(staked)(last_vote_weight)(proxied_vote_weight)(is_proxy)(reserved1)(reserved2)(reserved3) )
 
 FC_REFLECT( zmqplugin::currency_balance,
             (account_name)(contract)(balance)(stake)(refund)(deleted))
