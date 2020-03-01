@@ -474,15 +474,6 @@ namespace eosio {
       for (auto accit = accounts.begin(); accit != accounts.end(); ++accit) {
         name account_name = *accit;
         if( is_account_of_interest(account_name) ) {
-          resource_balance bal;
-          bal.account_name = account_name;
-          rm.get_account_limits( account_name, bal.ram_quota, bal.net_weight, bal.cpu_weight );
-          bool grelisted = chain.is_resource_greylisted(account_name);
-          bal.net_limit = rm.get_account_net_limit_ex( account_name, !grelisted);
-          bal.cpu_limit = rm.get_account_cpu_limit_ex( account_name, !grelisted);
-          bal.ram_usage = rm.get_account_ram_usage( account_name );
-          zao.resource_balances.emplace_back(bal);
-
           abi_def abi;
           if( abi_serializer::to_abi(code_account.abi, abi) ) {
             abi_serializer abis( abi, abi_serializer_max_time );
@@ -490,7 +481,7 @@ namespace eosio {
             const auto &idx = db.get_index<key_value_index, by_scope_primary>();
             auto t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( config::system_account_name, account_name, N(delband) ));
             if (t_id != nullptr) {
-              auto it = idx.find(boost::make_tuple( t_id->id, account_name ));
+              auto it = idx.find(boost::make_tuple( t_id->id, account_name.to_uint64_t() ));
               if ( it != idx.end() ) {
                 stake_info stk;
                 vector<char> data;
@@ -505,7 +496,7 @@ namespace eosio {
 
             t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( config::system_account_name, account_name, N(refunds) ));
             if (t_id != nullptr) {
-              auto it = idx.find(boost::make_tuple( t_id->id, account_name ));
+              auto it = idx.find(boost::make_tuple( t_id->id, account_name.to_uint64_t() ));
               if ( it != idx.end() ) {
                 vector<char> data;
                 copy_inline_row(*it, data);
@@ -515,7 +506,7 @@ namespace eosio {
 
             t_id = db.find<chain::table_id_object, chain::by_code_scope_table>(boost::make_tuple( config::system_account_name, config::system_account_name, N(voters) ));
             if (t_id != nullptr) {
-              auto it = idx.find(boost::make_tuple( t_id->id, account_name ));
+              auto it = idx.find(boost::make_tuple( t_id->id, account_name.to_uint64_t() ));
               if ( it != idx.end() ) {
                 vector<char> data;
                 copy_inline_row(*it, data);
@@ -630,7 +621,6 @@ namespace eosio {
               if( data.receiver != data.from ) {
                 accounts.insert(data.receiver);
               }
-
               add_asset_move(asset_moves, N(eosio.token), core_symbol, data.from);
               add_asset_move(asset_moves, N(eosio.token), core_symbol, data.receiver);
           }else if(action_name == N(undelegatebw)){
@@ -644,12 +634,10 @@ namespace eosio {
           }else if(action_name == N(withdraw)){
               const auto data = fc::raw::unpack<zmqplugin::syscontract::withdraw>(at.act.data);
               accounts.insert(data.owner);
-
               add_asset_move(asset_moves, N(eosio.token), core_symbol, data.owner);
           }else if(action_name == N(buyrex)){
               const auto data = fc::raw::unpack<zmqplugin::syscontract::buyrex>(at.act.data);
               accounts.insert(data.from);
-
               add_asset_move(asset_moves, N(eosio.token), core_symbol, data.from);
           }else if(action_name == N(unstaketorex)){
               const auto data = fc::raw::unpack<zmqplugin::syscontract::unstaketorex>(at.act.data);
@@ -662,32 +650,26 @@ namespace eosio {
           }else if(action_name == N(sellrex)){
               const auto data = fc::raw::unpack<zmqplugin::syscontract::sellrex>(at.act.data);
               accounts.insert(data.from);
-
               add_asset_move(asset_moves, N(eosio.token), core_symbol, data.from);
           }else if(action_name == N(updaterex)){
               const auto data = fc::raw::unpack<zmqplugin::syscontract::updaterex>(at.act.data);
               accounts.insert(data.owner);
-
               add_asset_move(asset_moves, N(eosio.token), core_symbol, data.owner);
           }else if(action_name == N(consolidate)){
               const auto data = fc::raw::unpack<zmqplugin::syscontract::consolidate>(at.act.data);
               accounts.insert(data.owner);
-
               add_asset_move(asset_moves, N(eosio.token), core_symbol, data.owner);
           }else if(action_name == N(mvtosavings)){
               const auto data = fc::raw::unpack<zmqplugin::syscontract::mvtosavings>(at.act.data);
               accounts.insert(data.owner);
-
               add_asset_move(asset_moves, N(eosio.token), core_symbol, data.owner);
           }else if(action_name == N(mvfrsavings)){
               const auto data = fc::raw::unpack<zmqplugin::syscontract::mvfrsavings>(at.act.data);
               accounts.insert(data.owner);
-
               add_asset_move(asset_moves, N(eosio.token), core_symbol, data.owner);
           }else if(action_name == N(closerex)){
               const auto data = fc::raw::unpack<zmqplugin::syscontract::closerex>(at.act.data);
               accounts.insert(data.owner);
-
               add_asset_move(asset_moves, N(eosio.token), core_symbol, data.owner);
           }else if(action_name == N(regproducer)){
               const auto data = fc::raw::unpack<zmqplugin::syscontract::regproducer>(at.act.data);
