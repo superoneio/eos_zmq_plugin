@@ -165,6 +165,12 @@ namespace zmqplugin {
     bool                       deleted = false;
   };
 
+  struct stake_info {
+    name  account_name;
+    asset cpu_stake_by_self;
+    asset net_stake_by_self;
+  };
+
   struct voter_info {
     name                      owner;
     name                      proxy;
